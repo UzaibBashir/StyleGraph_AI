@@ -1,12 +1,64 @@
 from __future__ import annotations
 
-import json
 import os
+import sys
+import asyncio
+from io import BytesIO
+from pathlib import Path
 
-import httpx
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
+from PIL import Image, UnidentifiedImageError
 
-API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000").rstrip("/")
+
+def _secret(name: str, default: str = "") -> str:
+    try:
+        value = st.secrets.get(name)
+    except (FileNotFoundError, StreamlitSecretNotFoundError):
+        value = None
+    return str(value) if value else default
+
+
+for _name in ("QLOO_API_KEY", "QLOO_BASE_URL", "BACKEND_MODE", "MAX_UPLOAD_MB", "MODEL_NAME", "MODEL_PRETRAINED"):
+    if _name not in os.environ:
+        _value = _secret(_name)
+        if _value:
+            os.environ[_name] = _value
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+from app.schemas import PreferenceProfile
+from app.services.qloo_service import QlooError, QlooService
+from app.services.recommendation_service import DEMO_ENTITIES, recommend
+from app.services.vision_service import analyze_image, text_style_scores
+
+
+def _run_qloo(interest: str) -> list[dict]:
+    async def request() -> list[dict]:
+        qloo = QlooService()
+        try:
+            return await qloo.brand_recommendations(interest)
+        finally:
+            await qloo.close()
+
+    return asyncio.run(request())
+
+
+def _analyze_uploaded_image(raw: bytes) -> tuple[dict, object]:
+    max_upload_mb = int(os.getenv("MAX_UPLOAD_MB", "8"))
+    if len(raw) > max_upload_mb * 1024 * 1024:
+        raise ValueError(f"Image must be smaller than {max_upload_mb} MB.")
+    try:
+        with Image.open(BytesIO(raw)) as opened:
+            if opened.format not in {"JPEG", "PNG", "WEBP"}:
+                raise ValueError("Upload a JPEG, PNG, or WebP image.")
+            if opened.width * opened.height > 20_000_000:
+                raise ValueError("Image dimensions are too large to process safely.")
+            opened.verify()
+    except (UnidentifiedImageError, OSError) as exc:
+        raise ValueError("The uploaded file is not a valid supported image.") from exc
+    return analyze_image(raw)
+
+
 st.set_page_config(page_title="StyleGraph AI", page_icon="✳", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
@@ -80,20 +132,55 @@ with left:
                 "emphasis": {"Balanced": "balanced", "Visual similarity": "visual", "Cultural discovery": "cultural"}[emphasis],
                 "feedback": [f"{action}:{name}" for name, action in st.session_state.feedback.items()],
             }
-            files = {"image": (uploaded.name, uploaded.getvalue(), uploaded.type)} if uploaded else None
-            data = {"profile_json": json.dumps(profile), "mode": "live" if mode_label.startswith("Live") else "demo"}
             try:
                 with st.spinner("Reading the visual signal and finding relevant inspiration…"):
-                    response = httpx.post(f"{API_URL}/api/style/analyze", data=data, files=files, timeout=90)
-                if response.is_error:
-                    try:
-                        st.error(response.json().get("detail", "Analysis failed. Check your inputs and try again."))
-                    except ValueError:
-                        st.error("The style service returned an unexpected response.")
-                else:
-                    st.session_state.results = response.json()
-            except httpx.HTTPError:
-                st.error("The style service is unavailable. Start the backend or check BACKEND_API_URL.")
+                    preference_profile = PreferenceProfile.model_validate(profile)
+                    analysis = None
+                    image_vector = None
+                    if uploaded:
+                        analysis, image_vector = _analyze_uploaded_image(uploaded.getvalue())
+                    else:
+                        text = " ".join(
+                            [preference_profile.description, preference_profile.aesthetic,
+                             preference_profile.occasion, preference_profile.interests]
+                        )
+                        scores = text_style_scores(text) if text.strip() else {}
+                        matches = sorted(scores.items(), key=lambda item: item[1], reverse=True)[:4]
+                        analysis = {
+                            "description": "Text preferences compared with broad style descriptions; no image characteristics were observed.",
+                            "styles": [{"name": name, "score": round(score, 4)} for name, score in matches],
+                            "colors": [],
+                            "suggestions": ["Add an outfit image for visual comparison", "Try a different occasion or aesthetic"],
+                            "method": "OpenAI CLIP ViT-B/32 text-text cosine similarity.",
+                        }
+                    active_mode = "live" if mode_label.startswith("Live") else "demo"
+                    notes = []
+                    if active_mode == "live":
+                        candidates = _run_qloo(preference_profile.interests)
+                        if not candidates:
+                            notes.append("Qloo returned no brand matches for this interest. Try a more specific artist, film, or brand name.")
+                    else:
+                        candidates = DEMO_ENTITIES
+                        notes.append("Demo recommendations come from a curated sample catalog, not Qloo.")
+                    recommendations = recommend(
+                        preference_profile,
+                        candidates,
+                        analysis.get("styles", []),
+                        image_vector,
+                        active_mode,
+                    )
+                    st.session_state.results = {
+                        "mode": active_mode,
+                        "analysis": analysis,
+                        "recommendations": recommendations,
+                        "notes": notes,
+                    }
+            except QlooError as exc:
+                st.error(str(exc))
+            except RuntimeError:
+                st.error("The style model is temporarily unavailable. Please retry.")
+            except (OSError, ValueError) as exc:
+                st.error(f"Analysis failed: {exc}")
 
 with right:
     st.markdown("### Three signals, one point of view")
@@ -135,21 +222,12 @@ if result:
             lcol, rcol = st.columns(2)
             if lcol.button("Like", key=f"like-{key}"):
                 st.session_state.feedback[key] = "like"
-                try:
-                    httpx.post(f"{API_URL}/api/feedback", json={"recommendation_id": key, "action": "like"}, timeout=5)
-                except httpx.HTTPError:
-                    pass
                 st.toast("Saved for this session. Analyze again to refine the ranking.")
             if rcol.button("Not for me", key=f"reject-{key}"):
                 st.session_state.feedback[key] = "reject"
-                try:
-                    httpx.post(f"{API_URL}/api/feedback", json={"recommendation_id": key, "action": "reject"}, timeout=5)
-                except httpx.HTTPError:
-                    pass
                 st.toast("Removed from your next session ranking.")
     if result.get("mode") == "live" and not result.get("recommendations"):
         st.warning("No live Qloo brand inspirations were returned. Refine the cultural reference and try again, or choose demo mode.")
 
 st.markdown("---")
 st.caption("StyleGraph AI · Broad aesthetic similarities, not garment or brand recognition. Images are processed in memory and not retained by the application. Feedback lasts for this browser session only.")
-

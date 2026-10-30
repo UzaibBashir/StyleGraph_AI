@@ -65,19 +65,18 @@ cd frontend
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-$env:BACKEND_API_URL = "http://localhost:8000"
 streamlit run app.py
 ```
 
-Open Streamlit at `http://localhost:8501`. Demo mode needs no credentials. For a general Python shell, replace activation with `. .venv/bin/activate` and use `export BACKEND_API_URL=http://localhost:8000`.
+Open Streamlit at `http://localhost:8501`. Demo mode needs no credentials. For a general Python shell, replace activation with `. .venv/bin/activate`.
 
 ## Configuration
 
 Backend variables are in `backend/.env.example`: `QLOO_API_KEY`, `QLOO_BASE_URL`, `BACKEND_MODE`, `FRONTEND_ORIGINS`, `MAX_UPLOAD_MB`, `MODEL_NAME`, and `MODEL_PRETRAINED`. Keep `QLOO_API_KEY` only in the backend environment. `BACKEND_MODE` sets the default reported health mode; individual analysis calls explicitly select demo or live. Live calls fail clearly when the key is missing and never fall back to sample data.
 
-Frontend uses `BACKEND_API_URL` in `frontend/.env.example` (Streamlit Cloud: set it in app secrets or environment configuration). The browser never receives a Qloo credential.
+The Streamlit app reads `QLOO_API_KEY`, `QLOO_BASE_URL`, and `BACKEND_MODE` from Streamlit secrets or environment variables. The Qloo credential is used only by the Streamlit server process.
 
-To enable live requests, request hackathon API access using Qloo's [official developer guide](https://docs.qloo.com/reference/qloo-llm-hackathon-developer-guide), then configure the provided key on the backend host. A key's access and entity-type permissions are controlled by Qloo. CORS should list the deployed frontend origin in `FRONTEND_ORIGINS`.
+To enable live requests, request hackathon API access using Qloo's [official developer guide](https://docs.qloo.com/reference/qloo-llm-hackathon-developer-guide), then configure the provided key in the Streamlit server environment. A key's access and entity-type permissions are controlled by Qloo. If you also run the separate FastAPI backend, its `FRONTEND_ORIGINS` setting still applies.
 
 ## API
 
@@ -100,9 +99,31 @@ Tests cover health, missing-input validation, and session feedback. No live Qloo
 
 ## Deployment
 
-Deploy the backend and frontend separately. For Render, create a Docker web service from `backend/Dockerfile`, set `QLOO_API_KEY` (optional for demo), `BACKEND_MODE=demo`, and `FRONTEND_ORIGINS` to the Streamlit origin. Render supplies `PORT`; the container binds to it. Configure the service health check to `/health`. The first model inference downloads CLIP weights; select an instance with sufficient memory and outbound network access.
+This repository can be deployed as a **single Streamlit app without Docker**. The Streamlit process now runs the vision model, recommendation ranker, and optional Qloo client in-process; the FastAPI backend remains available for local/API deployments but is not required by the Streamlit app.
 
-For Streamlit Community Cloud, deploy from the `frontend/` directory with `app.py` as entry point and dependencies from `requirements.txt`; set `BACKEND_API_URL` to the deployed backend origin. This repository is the public source for the project:
+Create a Streamlit Community Cloud app from this repository with:
+
+- **Main file path:** `frontend/app.py`
+- **Python version:** 3.11 (selected by the repository-level `runtime.txt`)
+
+The complete Streamlit dependency set is declared in `frontend/requirements.txt`. In the app's **Settings → Secrets**, add:
+
+```toml
+QLOO_API_KEY = "your-key" # optional for demo mode
+QLOO_BASE_URL = "https://hackathon.api.qloo.com"
+BACKEND_MODE = "demo"
+```
+
+The app reads these values on the server and does not display the Qloo key to users. Open the deployed app and run a demo analysis first. The first image analysis downloads the OpenCLIP weights and may be slow on a free instance; CPU inference and cold starts can take several minutes. Use Python 3.11 and an instance with enough memory for PyTorch and OpenCLIP.
+
+To enable live Qloo discovery, request hackathon API access using Qloo's [official developer guide](https://docs.qloo.com/reference/qloo-llm-hackathon-developer-guide), then add the issued key to Streamlit Community Cloud secrets:
+
+```text
+QLOO_API_KEY=your-key
+BACKEND_MODE=demo
+```
+
+In the Streamlit-only deployment, “backend host” means the Streamlit server environment. The UI's live mode explicitly requests Qloo and does not silently fall back to demo recommendations. This repository is the public source for the project:
 
 - Public repository: https://github.com/UzaibBashir/StyleGraph_AI
 - Live demo URL: pending external publication; set the final deployed Streamlit URL here after hosting is completed.
@@ -111,13 +132,11 @@ For Streamlit Community Cloud, deploy from the `frontend/` directory with `app.p
 
 Before the hackathon submission, verify the following:
 
-1. Backend is live and publicly reachable.
-2. Frontend is live and publicly reachable.
-3. `BACKEND_API_URL` is configured to the deployed backend origin in Streamlit secrets/environment.
-4. `QLOO_API_KEY` is set on the backend host for live requests.
-5. Demo mode works without credentials.
-6. Live mode works with a real cultural reference and returns Qloo results.
-7. The public repo is visible in the GitHub About section under a visible open-source license.
+1. The Streamlit app is live and publicly reachable.
+2. Streamlit secrets contain `QLOO_API_KEY` if live mode is required.
+3. Demo mode works without credentials.
+4. Live mode works with a real cultural reference and returns Qloo results.
+5. The public repo is visible in the GitHub About section under a visible open-source license.
 
 ## Limitations and next steps
 
@@ -131,4 +150,3 @@ Before the hackathon submission, verify the following:
 ## License
 
 MIT. The project is licensed under the terms in `LICENSE`.
-
