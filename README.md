@@ -102,7 +102,22 @@ Tests cover health, missing-input validation, and session feedback. No live Qloo
 
 Deploy the backend and frontend separately. For Render, create a Docker web service from `backend/Dockerfile`, set `QLOO_API_KEY` (optional for demo), `BACKEND_MODE=demo`, and `FRONTEND_ORIGINS` to the Streamlit origin. Render supplies `PORT`; the container binds to it. Configure the service health check to `/health`. The first model inference downloads CLIP weights; select an instance with sufficient memory and outbound network access.
 
-For Streamlit Community Cloud, deploy from the `frontend/` directory with `app.py` as entry point and dependencies from `requirements.txt`; set `BACKEND_API_URL` to the deployed backend origin. No public deployment was performed as part of this repository build; add verified public URLs here after deployment.
+For Streamlit Community Cloud, deploy from the `frontend/` directory with `app.py` as entry point and dependencies from `requirements.txt`; set `BACKEND_API_URL` to the deployed backend origin. This repository is the public source for the project:
+
+- Public repository: https://github.com/UzaibBashir/StyleGraph_AI
+- Live demo URL: pending external publication; set the final deployed Streamlit URL here after hosting is completed.
+
+## Submission checklist
+
+Before the hackathon submission, verify the following:
+
+1. Backend is live and publicly reachable.
+2. Frontend is live and publicly reachable.
+3. `BACKEND_API_URL` is configured to the deployed backend origin in Streamlit secrets/environment.
+4. `QLOO_API_KEY` is set on the backend host for live requests.
+5. Demo mode works without credentials.
+6. Live mode works with a real cultural reference and returns Qloo results.
+7. The public repo is visible in the GitHub About section under a visible open-source license.
 
 ## Limitations and next steps
 
@@ -115,5 +130,5 @@ For Streamlit Community Cloud, deploy from the `frontend/` directory with `app.p
 
 ## License
 
-MIT. Replace the copyright placeholders in `LICENSE` before publication.
+MIT. The project is licensed under the terms in `LICENSE`.
 
