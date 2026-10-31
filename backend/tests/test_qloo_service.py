@@ -42,3 +42,29 @@ def test_qloo_search_then_brand_insights_contract(monkeypatch):
     assert brands[0]["cultural_signal"] == 0.72
     assert brands[0]["source"] == "Qloo Insights API"
 
+
+def test_qloo_search_accepts_documented_flat_results(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "qloo_api_key", "test-key")
+
+    def handler(request):
+        if request.url.path == "/search":
+            return httpx.Response(200, json={"results": [
+                {"entity_id": "entity-123", "name": "Example Film", "type": "urn:entity:movie"},
+            ]})
+        return httpx.Response(200, json={"results": {"entities": []}})
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://hackathon.api.qloo.com",
+        headers={"X-Api-Key": "test-key"},
+    )
+    service = QlooService(client)
+
+    async def request_brands():
+        try:
+            return await service.brand_recommendations("Example Film")
+        finally:
+            await client.aclose()
+
+    assert asyncio.run(request_brands()) == []

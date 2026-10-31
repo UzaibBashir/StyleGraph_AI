@@ -56,10 +56,18 @@ class QlooService:
             return []
         search = await self._get("/search", {"query": query, "types": "urn:entity:artist,urn:entity:brand,urn:entity:movie", "take": "5"})
         search_results = search.get("results")
-        if not isinstance(search_results, dict) or not isinstance(search_results.get("entities", []), list):
+        if isinstance(search_results, list):
+            entities = search_results
+        elif isinstance(search_results, dict) and isinstance(search_results.get("entities"), list):
+            entities = search_results["entities"]
+        else:
             raise QlooError("Qloo entity search returned an unexpected response shape.")
-        entities = search_results.get("entities", [])
-        entity_id = next((item.get("entity_id") or item.get("id") for item in entities if item.get("entity_id") or item.get("id")), None)
+        if not all(isinstance(item, dict) for item in entities):
+            raise QlooError("Qloo entity search returned an unexpected response shape.")
+        entity_id = next(
+            (item.get("entity_id") or item.get("id") for item in entities if item.get("entity_id") or item.get("id")),
+            None,
+        )
         if not entity_id:
             return []
         result = await self._get("/v2/insights", {
@@ -73,6 +81,8 @@ class QlooService:
         candidates = insight_results.get("entities", [])
         normalized = []
         for entity in candidates:
+            if not isinstance(entity, dict):
+                raise QlooError("Qloo brand insights returned an unexpected response shape.")
             name = entity.get("name")
             if not isinstance(name, str) or not name.strip():
                 continue
@@ -96,4 +106,3 @@ class QlooService:
     async def close(self):
         if self.owns_client:
             await self.client.aclose()
-
